@@ -6,7 +6,7 @@
   'use strict';
 
   const PM = (typeof module === 'object' && module.exports)
-    ? Object.assign({}, require('./view.js'), require('./input.js'), require('./present.js'))
+    ? Object.assign({}, require('./view.js'), require('./input.js'), require('./present.js'), require('./audio.js'))
     : globalThis.PM;
 
   function readSeed() {
@@ -24,11 +24,16 @@
     const canvas = document.getElementById('screen');
     if (!canvas || !canvas.getContext) return;
     const ctx = canvas.getContext('2d', { alpha: false }) || canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
+    const pixel = document.createElement('canvas');
+    pixel.width = 384;
+    pixel.height = 216;
+    const pctx = pixel.getContext('2d', { alpha: false }) || pixel.getContext('2d');
+    let viewScale = 1;
     let state = null;
     let present = null;
     let down = null;
     let lastTime = 0;
+    let heardReveal = 0;
 
     function monsterOfHit(hit) {
       if (!hit) return null;
@@ -76,8 +81,12 @@
 
     function fit() {
       const scale = Math.max(1, Math.floor(Math.min(window.innerWidth / 384, window.innerHeight / 216)));
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.style.width = (384 * scale) + 'px';
       canvas.style.height = (216 * scale) + 'px';
+      canvas.width = Math.max(384, Math.round(384 * scale * dpr));
+      canvas.height = Math.max(216, Math.round(216 * scale * dpr));
+      viewScale = canvas.width / 384;
     }
 
     function pointOf(event) {
@@ -112,7 +121,13 @@
     function paint() {
       syncFocus();
       const lay = layoutNow();
-      PM.draw(ctx, lay, state, present);
+      PM.beginText();
+      PM.draw(pctx, lay, state, present);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(pixel, 0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingEnabled = true;
+      PM.flushText(ctx, viewScale);
       return lay;
     }
 
@@ -165,7 +180,11 @@
       if (zone.zone === 'extract') res = PM.moveToExtract(state, drag.id, zone.index);
       else if (zone.zone === 'breed') res = PM.moveToBreed(state, drag.id, zone.index);
       else if (zone.zone === 'cage') res = PM.moveToCage(state, drag.id);
-      if (!res || !res.ok) return;
+      if (!res || !res.ok) {
+        PM.play('deny');
+        return;
+      }
+      PM.play('place');
       present.selectedId = drag.id;
       present.read = { id: drag.id };
       present.detail = { monsterId: drag.id, skill: 0 };
@@ -174,7 +193,10 @@
     }
 
     function startResolve() {
-      if (!PM.canStartExtract(state).ok) return;
+      if (!PM.canStartExtract(state).ok) {
+        PM.play('deny');
+        return;
+      }
       present.suction = null;
       present.drag = null;
       present.banner = null;
@@ -186,6 +208,9 @@
       const started = PM.startExtract(state);
       if (!started.ok) return;
       present.log = PM.beginLog(state.extraction.events.length);
+      heardReveal = present.log.reveal;
+      PM.play('extract');
+      if (heardReveal > 0) PM.play('tick');
     }
 
     function onLogClick() {
@@ -200,13 +225,17 @@
         if (state.extraction && !state.extraction.committed) PM.commitExtraction(state);
         const checked = PM.ackCheck(state);
         if (!checked.ok) return;
-        if (state.phase === '工资结算阶段') present.log.mode = 'wage';
-        else {
+        if (state.phase === '工资结算阶段') {
+          present.log.mode = 'wage';
+          PM.play('wage');
+        } else {
           present.log = null;
           present.focusId = null;
-          if (state.phase === '操作阶段' && state.overtimeState === 'open' && !present.seenOvertime) {
+          if (state.phase === '失败') PM.play('fail');
+          else if (state.phase === '操作阶段' && state.overtimeState === 'open' && !present.seenOvertime) {
             present.banner = 'overtimeAsk';
             present.seenOvertime = true;
+            PM.play('overtime');
           }
         }
         return;
@@ -214,6 +243,7 @@
       if (present.log.mode === 'wage') {
         const paid = PM.ackWage(state);
         if (!paid.ok) return;
+        PM.play(state.phase === '胜利结算' ? 'victory' : 'shop');
         present.log = null;
         present.banner = null;
         present.selectedId = null;
@@ -225,13 +255,19 @@
 
     function tryBuy(offerId) {
       const res = PM.buy(state, offerId);
-      if (res.ok) present.banner = null;
-      else if (res.reason === PM.TEXT.needGold) present.banner = 'needGold';
+      if (res.ok) {
+        present.banner = null;
+        PM.play('buy');
+      } else if (res.reason === PM.TEXT.needGold) {
+        present.banner = 'needGold';
+        PM.play('deny');
+      }
     }
 
     function trySell(id) {
       const res = PM.sell(state, id);
       if (!res.ok) return;
+      PM.play('sell');
       if (present.selectedId === id) present.selectedId = null;
       present.banner = null;
     }
@@ -240,6 +276,7 @@
       const born = !!state.pendingBreed;
       const res = PM.confirmEndShop(state);
       if (!res.ok) return;
+      PM.play(born ? 'breed' : 'ui');
       present.banner = born ? 'breedDone' : null;
       present.selectedId = null;
       present.hoverId = null;
@@ -257,6 +294,7 @@
       }
       if (hit.kind === 'opening') {
         PM.selectOpening(state, hit.index);
+        PM.play('pick');
         present.hoverId = null;
         present.selectedId = null;
         present.banner = null;
@@ -286,7 +324,10 @@
           present.banner = null;
           PM.requestEndShop(state);
         } else if (hit.id === 'sell' && present.selectedId) trySell(present.selectedId);
-        else if (hit.id === 'again') begin();
+        else if (hit.id === 'again') {
+          PM.play('ui');
+          begin();
+        }
         return;
       }
       if (hit.kind === 'offer') {
@@ -313,6 +354,7 @@
     });
 
     canvas.addEventListener('pointerdown', function (event) {
+      PM.unlock();
       present.pointer = pointOf(event);
       if (event.button === 2) {
         event.preventDefault();
@@ -402,7 +444,12 @@
         !state.extraction.committed
       );
       const count = playing ? state.extraction.events.length : -1;
+      const before = present.log && present.log.mode === 'play' ? present.log.reveal : heardReveal;
       const done = PM.advancePresent(present, raw, count);
+      if (playing && present.log && present.log.reveal > before) {
+        heardReveal = present.log.reveal;
+        PM.play('tick');
+      }
       if (done) PM.commitExtraction(state);
       paint();
       window.requestAnimationFrame(tick);
