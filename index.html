@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>怪物培育</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #1f102a;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      touch-action: none;
+      user-select: none;
+      -webkit-user-drag: none;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: #1f102a;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="screen" width="384" height="216"></canvas>
+  <script src="src/content.js"></script>
+  <script src="src/rng.js"></script>
+  <script src="src/rules.js"></script>
+  <script src="src/game.js"></script>
+  <script src="src/palette.js"></script>
+  <script src="src/font.js"></script>
+  <script src="src/icons.js"></script>
+  <script src="src/view.js"></script>
+  <script src="src/input.js"></script>
+  <script src="src/present.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
